@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ffmpeg-wasm-bridge"
+version = "1.0.0"
+description = "Convert media files using FFmpeg WebAssembly and a local server"
+readme = "README.md"
+authors = [{ name = "dinoosauro", email = "dinoosauro-python@googlegroups.com" }]
+license = "MIT"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = ["aiohttp"]
+requires-python = ">=3.10"
+keywords = ["ffmpeg", "webassembly", "ffmpeg server", "server"]
+
+[project.urls]
+Homepage = "https://github.com/dinoosauro/ffmpeg-wasm-bridge"
+Documentation = "https://github.com/dinoosauro/ffmpeg-wasm-bridge"
+Repository = "https://github.com/dinoosauro/ffmpeg-wasm-bridge.git"
+Issues = "https://github.com/dinoosauro/ffmpeg-wasm-bridge/issues"
+
+[project.scripts]
+ffmpeg_wasm_bridge = "ffmpeg_wasm_bridge.server:_main"
+
+[tool.setuptools]
+packages = ["ffmpeg_wasm_bridge"]
+package-dir = {"" = "."}
+include-package-data = true
+
+[tool.setuptools.package-data]
+"*" = ["static/*.html"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["tests.py"]
+
