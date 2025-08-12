@@ -20,16 +20,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python 3.10
+    - name: Set up Python 3.12
       uses: actions/setup-python@v3
       with:
         python-version: "3.12"
-    - name: Install Firefox
-      run: sudo apt install firefox
+    - name: Install Chrome
+      run: |
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        sudo sh -c 'echo "deb [arch=amd64] https://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+        sudo apt update
+        sudo apt install -y google-chrome-stable
     - name: Install dependencies
       run: pip install -r requirements.txt
     - name: Download temp files
-      run: cd ffmpeg_wasm_bridge && curl -o audio.ogg https://upload.wikimedia.org/wikipedia/commons/a/a0/Chopin_Nocturne_21_in_C_minor_Posthumous_Diana_Hughes.ogg && curl -o image0.jpg https://upload.wikimedia.org/wikipedia/commons/1/19/Gardens_by_the_Bay%2C_Marina_Bay%2C_Singapur%2C_2023-08-19%2C_DD_05-07_HDR.jpg && curl -o image1.jpg https://upload.wikimedia.org/wikipedia/commons/0/03/Itsukushima-jinja_torii%2C_Miyajima%2C_Japan%2C_20240816_1728_4082.jpg
+      run: cd ffmpeg_wasm_bridge && curl -o audio.ogg https://upload.wikimedia.org/wikipedia/commons/a/a0/Chopin_Nocturne_21_in_C_minor_Posthumous_Diana_Hughes.ogg && curl -o image0.jpg https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Comet_Tsuchinshan–ATLAS_over_Ohio_%28Composite%29.jpg/500px-Comet_Tsuchinshan–ATLAS_over_Ohio_%28Composite%29.jpg && curl -o image1.jpg https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/DDG-125_acceptance_trials.jpg/1080px-DDG-125_acceptance_trials.jpg
     - name: Run tests
-      run: cd ffmpeg_wasm_bridge && python3 tests.py audio.ogg image0.jpg image1.jpg
+      run: cd ffmpeg_wasm_bridge && python3 tests.py audio.ogg image0.jpg image1.jpg --autorun-chrome
     

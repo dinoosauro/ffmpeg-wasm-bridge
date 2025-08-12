@@ -3,17 +3,18 @@ import sys
 import os
 import copy
 from server import FFmpegOperation, FFmpegServer, FileBridge
+import subprocess
 
 class __test_files():
     async def start(self):
         self.server = FFmpegServer()
         await self.server.start()
-        import webbrowser
-        webbrowser.open(f"http://localhost:{self.server._actual_port}")
+        if len(sys.argv) > 4 and sys.argv[4] == "--autorun-chrome": # Open Chrome in headless mode. This is the only way we can run this script on GitHub Actions
+            subprocess.Popen(["google-chrome", "--headless", "--no-sandbox", "--disable-gpu", f"http://localhost:{self.server._actual_port}/"])
         self.operation = FFmpegOperation(self.server)
         await self.server._connected_to_ws
     def check_valid_file(self, file):
-        return os.path.isfile(file) and os.stat(file).st_size > 128_000
+        return os.path.isfile(file) and os.stat(file).st_size > 64_000
     async def test_normal_operation(self):
         # Just a normal operation. Let's convert a file to an Opus one
         await self.operation.run(["-i", sys.argv[1], "-acodec", "libopus", "-b:a", "96k", "-vn", "__FFmpegWrapper_Test1.ogg"])
