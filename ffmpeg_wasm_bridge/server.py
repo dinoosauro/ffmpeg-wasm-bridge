@@ -81,10 +81,6 @@ class FFmpegServer:
     A nested dictionary: the main dictionary has as a key the ID of the FFmpegOperation, and returns a dictionary where the key is a Future ID, and the value its Future.
     This object is used to "resolve" these "promises" after a callback from the webpage has been triggered.
     """
-    _ffmpeg_wasm_version = "0.11.x"
-    """
-    The version of FFmpeg WebAssembly that is being used.
-    """
     async def _serve_file(self, filename: str, enforce_local_files=False):
         """Serve individual files
         Arguments:
@@ -99,7 +95,8 @@ class FFmpegServer:
             path=filename,
             headers={
                 "Cross-Origin-Opener-Policy": "same-origin",
-                "Cross-Origin-Embedder-Policy": "require-corp"
+                "Cross-Origin-Embedder-Policy": "require-corp",
+                "Cross-Origin-Resource-Policy": "same-origin"
             }
         )
 
@@ -114,7 +111,7 @@ class FFmpegServer:
         """
         Server FFmpeg WebAssembly libraries
         """
-        return await self._serve_file(f"{get_cache_dir()}{os.path.sep}{self._ffmpeg_wasm_version}{request.match_info.get('filename', '')}")
+        return await self._serve_file(f"{get_cache_dir()}{os.path.sep}{request.match_info.get('version', '')}{os.path.sep}{request.match_info.get('filename', '')}")
     
     async def _serve_index(self, request):
         """
@@ -150,41 +147,39 @@ class FFmpegServer:
             if msg.type == WSMsgType.TEXT:
                 json_msg = json.loads(msg.data)
                 if ((json_msg.get("id", None) == None or not json_msg["id"] in self._current_operations) and json_msg["action"] != "serverReady"): continue # We'll enforce ID passing for every message, obviously except the "serverReady" action since it's called before any FFmpegOperation can be created.
-                match(json_msg["action"]):
-                    case "serverReady": # Webpage connected to the WebSocket
-                        self._connected_to_ws.set_result(None)
-                    case "log": # Logging received from FFmpeg
-                        if self._show_ffmpeg_logging and "text" in json_msg: print(json_msg["text"])
-                    # The following four actions follow the same syntax: something has gone wrong (or right), and so we need to trigger an exception in the first case (if the user wants so), and to "resolve" the Future in the second case.
-                    # TODO: abstracting this in another function might be a great idea instead of this ugly copy-and-paste
-                    case "failedConversion": # FFmpeg operation failed
-                        if (json_msg["fileName"] in self._current_operations[json_msg["id"]]):
-                            if self._throw_exceptions_if_failed: 
-                                self._current_operations[json_msg["id"]][json_msg["fileName"]].set_exception(FFmpegException(json_msg["text"])) 
-                            else: self._current_operations[json_msg["id"]][json_msg["fileName"]].set_result(None)
-                    case "resourceFetched" | "failedResourceFetched": # Successful/Failed getting the resource from the user's drive
+                # We unfortunately have to use if/elif syntax and not match since on Python 3.9 match syntax is not supported (and I need to run this script also on Python 3.9)
+                if json_msg["action"] == "serverReady": # Webpage connected to the WebSocket
+                    self._connected_to_ws.set_result(None)
+                elif json_msg["action"] == "log": # Logging received from FFmpeg
+                    if self._show_ffmpeg_logging and "text" in json_msg: print(json_msg["text"])
+                # The following four actions follow the same syntax: something has gone wrong (or right), and so we need to trigger an exception in the first case (if the user wants so), and to "resolve" the Future in the second case.
+                # TODO: abstracting this in another function might be a great idea instead of this ugly copy-and-paste
+                elif json_msg["action"] == "failedConversion": # FFmpeg operation failed
+                    if (json_msg["fileName"] in self._current_operations[json_msg["id"]]):
+                        if self._throw_exceptions_if_failed: 
+                            self._current_operations[json_msg["id"]][json_msg["fileName"]].set_exception(FFmpegException(json_msg["text"])) 
+                        else: self._current_operations[json_msg["id"]][json_msg["fileName"]].set_result(None)
+                elif json_msg["action"] == "resourceFetched" or json_msg["action"] == "failedResourceFetched": # Successful/Failed getting the resource from the user's drive
                         if f'fileload_{json_msg["url"]}' in self._current_operations[json_msg["id"]]:
                             if json_msg["action"] == "failedResourceFetched" and self._throw_exceptions_if_failed: 
                                 self._current_operations[json_msg["id"]][f'fileload_{json_msg["url"]}'].set_exception(WebFetchException(json_msg["text"])) 
                             else: self._current_operations[json_msg["id"]][f'fileload_{json_msg["url"]}'].set_result(None)
-                    case "fileRemoved" | "failedFileRemove": # Successful/Failed deleting some files
-                        if f'delete_{json_msg["name"]}' in self._current_operations[json_msg["id"]]:
-                            if json_msg["action"] == "failedFileRemove" and self._throw_exceptions_if_failed: 
-                                self._current_operations[json_msg["id"]][f'delete_{json_msg["name"]}'].set_exception(FFmpegDeleteFileException(f'Failed removal of {json_msg["name"]}'))
-                            else:
-                                self._current_operations[json_msg["id"]][f'delete_{json_msg["name"]}'].set_result(None)
-                    case "reloaded" | "failedReload": # Successful/Failed reloading FFmpeg
-                        if "reload" in self._current_operations[json_msg["id"]]:
-                            if json_msg["action"] == "failedReload" and self._throw_exceptions_if_failed: 
-                                self._current_operations[json_msg["id"]][f"reload"].set_exception(FFmpegDeleteFileException("Failed FFmpeg reload"))
-                            else:
-                                self._current_operations[json_msg["id"]][f"reload"].set_result(None)
-                    case "createFFmpeg": # The webpage's FFmpeg object was created
-                        if "createffmpeg" in self._current_operations[json_msg["id"]]:
-                            self._current_operations[json_msg["id"]]["createffmpeg"].set_result(None)
-
-
-
+                elif json_msg["action"] == "fileRemoved" or json_msg["action"] =="failedFileRemove": # Successful/Failed deleting some files
+                    if f'delete_{json_msg["name"]}' in self._current_operations[json_msg["id"]]:
+                        if json_msg["action"] == "failedFileRemove" and self._throw_exceptions_if_failed: 
+                            self._current_operations[json_msg["id"]][f'delete_{json_msg["name"]}'].set_exception(FFmpegDeleteFileException(f'Failed removal of {json_msg["name"]}'))
+                        else:
+                            self._current_operations[json_msg["id"]][f'delete_{json_msg["name"]}'].set_result(None)
+                elif json_msg["action"] == "reloaded" or json_msg["action"] == "failedReload": # Successful/Failed reloading FFmpeg
+                    if "reload" in self._current_operations[json_msg["id"]]:
+                        if json_msg["action"] == "failedReload" and self._throw_exceptions_if_failed: 
+                            self._current_operations[json_msg["id"]][f"reload"].set_exception(FFmpegDeleteFileException("Failed FFmpeg reload"))
+                        else:
+                            self._current_operations[json_msg["id"]][f"reload"].set_result(None)
+                elif json_msg["action"] == "createFFmpeg": # The webpage's FFmpeg object was created
+                    if "createffmpeg" in self._current_operations[json_msg["id"]]:
+                        self._current_operations[json_msg["id"]]["createffmpeg"].set_result(None)
+                        
         return self._connected_ws
     _allowed_files: list[str] = []
     """
@@ -208,18 +203,6 @@ class FFmpegServer:
         A Future that'll be resolved when the Server will be staretd
         """
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Download the necessary resources for FFmpeg
-        if not os.path.exists(get_cache_dir()): os.mkdir(get_cache_dir())
-
-        for filename, url in dict({
-            f"{self._ffmpeg_wasm_version}ffmpeg.min.js": "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js",
-            f"{self._ffmpeg_wasm_version}ffmpeg-core.js": "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
-            f"{self._ffmpeg_wasm_version}ffmpeg-core.wasm": "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.wasm",
-            f"{self._ffmpeg_wasm_version}ffmpeg-core.worker.js": "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.worker.js",
-        }).items():
-            if not os.path.isfile(f"{get_cache_dir()}{os.path.sep}{filename}"):
-                print(f"Downloading FFmpeg WebAssembly ({filename})")
-                urllib.request.urlretrieve(url, f"{get_cache_dir()}{os.path.sep}{filename}")
 
     def _check_port(self, host: str = None, port: int = None):
         """
@@ -237,17 +220,21 @@ class FFmpegServer:
             except OSError:
                 return self._check_port(host, port + 1)
 
+    def _close_server(self, no):
+        sys.exit(0)
+
 
     async def start(self):
         if hasattr(self, '_runner') and self._runner is not None: # Avoid running the server multiple times
             print("Server is already running!")
             return
         app = web.Application()
-        app.router.add_get('/ffmpeg/{filename}', self._serve_ffmpeg_wrapper) # Get FFmpeg code
+        app.router.add_get('/ffmpeg/{version}/{filename}', self._serve_ffmpeg_wrapper) # Get FFmpeg code
         app.router.add_get('/files/', self._serve_file_wrapper) # Get user's local files 
         app.router.add_get('/', self._serve_index) # Get the index.html page
         app.router.add_get('/ws/{id}', self._get_websocket) # Connect to the WebSocket
         app.router.add_post('/save/', self._server_save)
+        app.router.add_get("/exit/", self._close_server)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         self._actual_port = self._check_port()
@@ -270,7 +257,7 @@ class FFmpegOperation:
     """
     If true, the webpage is ready to convert files, since the FFmpeg object with this ID has been established.
     """
-    def __init__(self, source: FFmpegServer):
+    def __init__(self, source: FFmpegServer, ffmpeg_wasm_version = "0.11.x-mt"):
         self.server = source
         """
         The server object to which this FFmpegOperation is tied
@@ -278,6 +265,10 @@ class FFmpegOperation:
         self.id = secrets.token_hex(32)
         """
         The ID of the current FFmpeg operation
+        """
+        self._ffmpeg_wasm_version = ffmpeg_wasm_version
+        """
+        The version of FFmpeg WebAssembly that is being used.
         """
 
     async def create_ffmpeg(self): 
@@ -287,10 +278,27 @@ class FFmpegOperation:
         if self._source_ready: return
         await self.server._connected_to_ws
         promise = asyncio.Future()
+                # Download the necessary resources for FFmpeg
+        if not os.path.exists(get_cache_dir()): os.mkdir(get_cache_dir())
+        if not os.path.exists(f"{get_cache_dir()}{os.path.sep}{self._ffmpeg_wasm_version}"): os.mkdir(f"{get_cache_dir()}{os.path.sep}{self._ffmpeg_wasm_version}")
+        download_items = dict({
+            f"{self._ffmpeg_wasm_version}{os.path.sep}ffmpeg.min.js": f"https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@{'0.12.15' if self._ffmpeg_wasm_version.startswith('0.12') else '0.11.6'}/dist/{'umd/' if self._ffmpeg_wasm_version.startswith('0.12') else ''}ffmpeg.min.js",
+            f"{self._ffmpeg_wasm_version}{os.path.sep}ffmpeg-core.js": f"https://cdn.jsdelivr.net/npm/@ffmpeg/core{'-mt' if self._ffmpeg_wasm_version == '0.12.x-mt' else '-st' if self._ffmpeg_wasm_version == '0.11.x-st' else ''}@{'0.12.10' if self._ffmpeg_wasm_version.startswith('0.12') else '0.11.1' if self._ffmpeg_wasm_version == '0.11.x-st' else '0.11.0'}/dist/{'umd/' if self._ffmpeg_wasm_version.startswith('0.12') else ''}ffmpeg-core.js",
+            f"{self._ffmpeg_wasm_version}{os.path.sep}ffmpeg-core.wasm": f"https://cdn.jsdelivr.net/npm/@ffmpeg/core{'-mt' if self._ffmpeg_wasm_version == '0.12.x-mt' else '-st' if self._ffmpeg_wasm_version == '0.11.x-st' else ''}@{'0.12.10' if self._ffmpeg_wasm_version.startswith('0.12') else '0.11.1' if self._ffmpeg_wasm_version == '0.11.x-st' else '0.11.0'}/dist/{'umd/' if self._ffmpeg_wasm_version.startswith('0.12') else ''}ffmpeg-core.wasm"
+        })
+        if self._ffmpeg_wasm_version != "0.12.x-st": download_items[f"{self._ffmpeg_wasm_version}{os.path.sep}ffmpeg-core.worker.js"] = f"https://cdn.jsdelivr.net/npm/@ffmpeg/core{'-mt' if self._ffmpeg_wasm_version == '0.12.x-mt' else '-st' if self._ffmpeg_wasm_version == '0.11.x-st' else ''}@{'0.12.10' if self._ffmpeg_wasm_version.startswith('0.12') else '0.11.1' if self._ffmpeg_wasm_version == '0.11.x-st' else '0.11.0'}/dist/{'umd/' if self._ffmpeg_wasm_version.startswith('0.12') else ''}ffmpeg-core.worker.js"
+        if self._ffmpeg_wasm_version.startswith("0.12"): download_items[f"{self._ffmpeg_wasm_version}{os.path.sep}814.ffmpeg.js"] = "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js"
+        for filename, url in download_items.items():
+            print(os.path.isfile(f"{get_cache_dir()}{os.path.sep}{filename}"), url)
+            if not os.path.isfile(f"{get_cache_dir()}{os.path.sep}{filename}"):
+                print(f"Downloading FFmpeg WebAssembly ({filename})")
+                urllib.request.urlretrieve(url, f"{get_cache_dir()}{os.path.sep}{filename}")
         self.server._current_operations[self.id] = dict() # Create the new dictionary that'll contain all the Futures of this operation
         self.server._current_operations[self.id]["createffmpeg"] = promise
         await self.server._connected_ws.send_json({
             "action": "createFFmpeg",
+            "version": self._ffmpeg_wasm_version,
+            "mainAppend": f"./ffmpeg/{self._ffmpeg_wasm_version}/ffmpeg.min.js",
             "id": self.id
         })
         await promise

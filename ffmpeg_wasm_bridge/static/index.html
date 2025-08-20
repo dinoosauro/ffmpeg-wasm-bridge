@@ -54,10 +54,8 @@
     <h1>FFmpeg Wrapper</h1>
     <p>The source script will execute FFmpeg commands using the WebAssembly version of FFmpeg. Please do not close this
         window until the script ended.</p><br>
-    <script src="./ffmpeg/ffmpeg.min.js"></script>
     <script>
         (async () => {
-            const { createFFmpeg, fetchFile } = FFmpeg;
             /**
              * The map that has as a key the operation ID, and as a value the FFmpeg object
             */
@@ -80,11 +78,13 @@
                 const socket = new WebSocket("./ws/abc")
                 socket.onmessage = async (msg) => {
                     const parse = JSON.parse(msg.data);
+                    console.log(parse);
                     switch (parse.action) {
                         case "start": { // Run the FFmpeg command
                             const fileName = parse.command.pop();
                             const [code, span, progress] = domMap.get(parse.id);
                             const ffmpeg = ffmpegObjStorage.get(parse.id);
+                            console.log(ffmpegObjStorage, parse.id);
                             try {
                                 span.textContent = "";
                                 /**
@@ -95,19 +95,19 @@
                                     if (parse.command[i].startsWith("http/")) { // This is a file that should be loaded. Since FFmpeg WebAssembly doesn't support HTTP fetching, we'll have to manually fetch it.
                                         const data = new Uint8Array(await (await fetch(`.${parse.command[i].substring(parse.command[i].indexOf("/"))}`)).arrayBuffer());
                                         const output = `${i}${parse.command[i].substring(parse.command[i].lastIndexOf("."))}`; // This will be the file name of the fetched file
-                                        await ffmpeg.FS("writeFile", output, data);
+                                        await ffmpeg.writeFile(output, data);
                                         parse.command[i] = output;
                                         fileToDelete.push(output);
                                     }
                                 }
                                 const outputName = `output${fileName.substring(fileName.lastIndexOf("."))}`;
-                                await ffmpeg.run(...parse.command, outputName);
-                                for (const file of fileToDelete) await ffmpeg.FS("unlink", file);
+                                await ffmpeg.exec([...parse.command, outputName]);
+                                for (const file of fileToDelete) await ffmpeg.removeFile(file);
                                 await fetch(`./save/?filename=${encodeURIComponent(fileName)}&id=${encodeURIComponent(parse.id)}`, {
                                     method: "POST",
-                                    body: await ffmpeg.FS("readFile", outputName)
+                                    body: await ffmpeg.readFile(outputName)
                                 });
-                                await ffmpeg.FS("unlink", outputName);
+                                await ffmpeg.removeFile(outputName);
                                 code.textContent = fileName;
                                 span.textContent = "successfully uploaded.";
                                 break;
@@ -127,7 +127,7 @@
                                 const ffmpeg = ffmpegObjStorage.get(parse.id);
                                 const req = await fetch(`.${parse.url.substring(parse.url.indexOf("/"))}`);
                                 if (!req.ok) throw Error(`Request to: ${req.url} returned status ${req.status}`);
-                                await ffmpeg.FS("writeFile", parse.name, new Uint8Array(await req.arrayBuffer()));
+                                await ffmpeg.writeFile(parse.name, new Uint8Array(await req.arrayBuffer()));
                                 socket.send(JSON.stringify({
                                     action: "resourceFetched",
                                     url: parse.url,
@@ -147,7 +147,7 @@
                         case "removeFile": { // Remove one of the forcefully added files from the memory
                             try {
                                 const ffmpeg = ffmpegObjStorage.get(parse.id);
-                                await ffmpeg.FS("unlink", parse.name);
+                                await ffmpeg.removeFile(parse.name);
                                 const [code, span, progress] = domMap.get(parse.id);
                                 span.textContent = "removed from WebAssembly memory (don't worry, it's still on your device!)";
                                 socket.send(JSON.stringify({
@@ -184,11 +184,24 @@
                             break;
                         }
                         case "createFFmpeg": { // Create the new FFmpeg object
-                            const ffmpeg = createFFmpeg({
-                                log: true,
-                                corePath: `${window.location.href.substring(0, window.location.href.lastIndexOf("/"))}/ffmpeg/ffmpeg-core.js`
+                            await new Promise(res => {
+                                const script = document.createElement("script");
+                                script.onload = () => res();
+                                script.onerror = (e) => {console.error(e); res()};
+                                script.src = parse.mainAppend;
+                                document.body.append(script);
+                            })
+                            const ffmpeg = new ffmpegOperations(parse.version, (msg) => {
+                                // Sometimes (usually after a reload), FFmpeg WebAssembly appends the new message to the old ones, instead of sending only the new one. So, if we notice that the new message start with the old message, we'll trim the old part.
+                                const prevMsg = prevTextMap.get(parse.id);
+                                prevTextMap.set(parse.id, msg.message);
+                                if (prevMsg && msg.message && msg.message.indexOf(prevMsg) === 0) msg.message = msg.message.substring(prevMsg.length);
+                                ws.send(JSON.stringify({ action: "log", text: msg.message, id: parse.id }));
+                                code.textContent = msg.message;
+                            }, ({ratio}) => {
+                                progress.value = ratio;
                             });
-                            await ffmpeg.load();
+                            await ffmpeg.promise;
                             // Create display elements
                             const card = Object.assign(document.createElement("div"), {className: "card"});
                             const paragraph = document.createElement("p");
@@ -199,18 +212,6 @@
                             card.append(Object.assign(document.createElement("h2"), {textContent: `Conversion status:`}), paragraph, document.createElement("br"), progress);
                             document.body.append(card, document.createElement("br"));
                             domMap.set(parse.id, [code, span, progress]);
-
-                            ffmpeg.setLogger((msg) => {
-                                // Sometimes (usually after a reload), FFmpeg WebAssembly appends the new message to the old ones, instead of sending only the new one. So, if we notice that the new message start with the old message, we'll trim the old part.
-                                const prevMsg = prevTextMap.get(parse.id);
-                                prevTextMap.set(parse.id, msg.message);
-                                if (prevMsg && msg.message && msg.message.indexOf(prevMsg) === 0) msg.message = msg.message.substring(prevMsg.length);
-                                ws.send(JSON.stringify({ action: "log", text: msg.message, id: parse.id }));
-                                code.textContent = msg.message;
-                            });
-                            ffmpeg.setProgress(({ratio}) => {
-                                progress.value = ratio;
-                            })
                             ffmpegObjStorage.set(parse.id, ffmpeg);
                             socket.send(JSON.stringify({
                                 action: "createFFmpeg",
@@ -224,6 +225,69 @@
             })
             ws.send(JSON.stringify({ action: "serverReady" }));
 
+            class ffmpegOperations {
+                version = "0.11.x";
+                ffmpeg;
+                isMultiThreaded = false;
+                promise;
+                load = async () => {
+                    if (this.version.startsWith("0.11")) {
+                        return await this.ffmpeg.load();
+                    }
+                    return await this.ffmpeg.load({
+                        coreURL: `${window.location.href.substring(0, window.location.href.lastIndexOf("/"))}/ffmpeg/${this.version}/ffmpeg-core.js`,
+                        wasmURL: `${window.location.href.substring(0, window.location.href.lastIndexOf("/"))}/ffmpeg/${this.version}/ffmpeg-core.wasm`,
+                        wokerURL: this.version.endsWith("mt") ? `${window.location.href.substring(0, window.location.href.lastIndexOf("/"))}/ffmpeg/${this.version}/ffmpeg-core.js` : undefined
+                    });
+                }
+                constructor(version, logFunction, progressFunction, isMultiThreaded) {
+                    this.version = version;
+                    this.isMultiThreaded = !!isMultiThreaded;
+                    this.promise = new Promise(async res => {
+                        if (this.version.startsWith("0.11")) {
+                            console.log(`${window.location.href.substring(0, window.location.href.lastIndexOf("/"))}/ffmpeg/${version}/ffmpeg-core.js`);
+                            this.ffmpeg = FFmpeg.createFFmpeg({
+                                log: true,
+                                mainName: version === "0.11.x-st" ? "main" : undefined,
+                                corePath: `${window.location.href.substring(0, window.location.href.lastIndexOf("/"))}/ffmpeg/${version}/ffmpeg-core.js`
+                            });
+                            console.log("Loading!!!");
+                            await this.load();
+                            console.log("Loaded");
+                            this.ffmpeg.setLogger(logFunction);
+                            this.ffmpeg.setProgress(progressFunction);
+                            console.log("Resolving...");
+                            res();
+                        } else {
+                            this.ffmpeg = new FFmpegWASM.FFmpeg();
+                            await this.load();
+                            this.ffmpeg.on("log", logFunction);
+                            this.ffmpeg.on("progress", (progress) => progressFunction({ratio: progress.progress}));
+                        }
+                        res();
+                    })
+                }
+                writeFile = async (fileName, uint8Arr) => {
+                    if (this.version.startsWith("0.11")) return await this.ffmpeg.FS("writeFile", fileName, uint8Arr);
+                    return await this.ffmpeg.writeFile(fileName, uint8Arr);
+                }
+                readFile = async (fileName) => {
+                    if (this.version.startsWith("0.11")) return await this.ffmpeg.FS("readFile", fileName);
+                    return await this.ffmpeg.readFile(fileName);
+                }
+                exec = async (commands) => {
+                    if (this.version.startsWith("0.11")) return await this.ffmpeg.run(...commands);
+                    return await this.ffmpeg.exec(commands);
+                }
+                removeFile = async (path) => {
+                    if (this.version.startsWith("0.11")) return await this.ffmpeg.FS("unlink", path);
+                    return await this.ffmpeg.deleteFile(path);
+                }
+                exit = async () => {
+                    if (this.version.startsWith("0.11")) return await this.ffmpeg.exit();
+                    return await ffmpeg.terminate();
+                }
+            }
         })()
 
     </script>
