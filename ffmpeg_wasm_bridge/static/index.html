@@ -78,13 +78,11 @@
                 const socket = new WebSocket("./ws/abc")
                 socket.onmessage = async (msg) => {
                     const parse = JSON.parse(msg.data);
-                    console.log(parse);
                     switch (parse.action) {
                         case "start": { // Run the FFmpeg command
                             const fileName = parse.command.pop();
                             const [code, span, progress] = domMap.get(parse.id);
                             const ffmpeg = ffmpegObjStorage.get(parse.id);
-                            console.log(ffmpegObjStorage, parse.id);
                             try {
                                 span.textContent = "";
                                 /**
@@ -103,10 +101,16 @@
                                 const outputName = `output${fileName.substring(fileName.lastIndexOf("."))}`;
                                 await ffmpeg.exec([...parse.command, outputName]);
                                 for (const file of fileToDelete) await ffmpeg.removeFile(file);
+                                if (ffmpeg.version.startsWith("0.11.x") && !ffmpeg.isMultiThreaded) { // The 0.11.x-st version of FFmpeg WebAssembly supports only a single run call. Therefore, we need to create a new FFmpeg object.
+                                    const newFfmpeg = getFfmpegOperation(ffmpeg.version, parse.id, code, progress);
+                                    await newFfmpeg.promise;
+                                    ffmpegObjStorage.set(parse.id, newFfmpeg);
+                                }
                                 await fetch(`./save/?filename=${encodeURIComponent(fileName)}&id=${encodeURIComponent(parse.id)}`, {
                                     method: "POST",
                                     body: await ffmpeg.readFile(outputName)
                                 });
+                                ffmpeg.version.startsWith("0.11.x") && !ffmpeg.isMultiThreaded && await ffmpeg.exit(); // Let's free memory since that process is basically useless.
                                 await ffmpeg.removeFile(outputName);
                                 code.textContent = fileName;
                                 span.textContent = "successfully uploaded.";
@@ -187,38 +191,29 @@
                             await new Promise(res => {
                                 const script = document.createElement("script");
                                 script.onload = () => res();
-                                script.onerror = (e) => {console.error(e); res()};
+                                script.onerror = (e) => { console.error(e); res() };
                                 script.src = parse.mainAppend;
                                 document.body.append(script);
                             })
-                            const ffmpeg = new ffmpegOperations(parse.version, (msg) => {
-                                // Sometimes (usually after a reload), FFmpeg WebAssembly appends the new message to the old ones, instead of sending only the new one. So, if we notice that the new message start with the old message, we'll trim the old part.
-                                const prevMsg = prevTextMap.get(parse.id);
-                                prevTextMap.set(parse.id, msg.message);
-                                if (prevMsg && msg.message && msg.message.indexOf(prevMsg) === 0) msg.message = msg.message.substring(prevMsg.length);
-                                ws.send(JSON.stringify({ action: "log", text: msg.message, id: parse.id }));
-                                code.textContent = msg.message;
-                            }, ({ratio}) => {
-                                progress.value = ratio;
-                            });
-                            await ffmpeg.promise;
                             // Create display elements
-                            const card = Object.assign(document.createElement("div"), {className: "card"});
+                            const card = Object.assign(document.createElement("div"), { className: "card" });
                             const paragraph = document.createElement("p");
-                            const code = Object.assign(document.createElement("code"), {textContent: "Loading. Please wait."});
+                            const code = Object.assign(document.createElement("code"), { textContent: "Loading. Please wait." });
                             const span = document.createElement("span");
                             paragraph.append(code, span);
-                            const progress = Object.assign(document.createElement("progress"), {max: 1});
-                            card.append(Object.assign(document.createElement("h2"), {textContent: `Conversion status:`}), paragraph, document.createElement("br"), progress);
+                            const progress = Object.assign(document.createElement("progress"), { max: 1 });
+                            card.append(Object.assign(document.createElement("h2"), { textContent: `Conversion status:` }), paragraph, document.createElement("br"), progress);
                             document.body.append(card, document.createElement("br"));
                             domMap.set(parse.id, [code, span, progress]);
+                            const ffmpeg = getFfmpegOperation(parse.version, parse.id, code, progress);
+                            await ffmpeg.promise;
                             ffmpegObjStorage.set(parse.id, ffmpeg);
                             socket.send(JSON.stringify({
                                 action: "createFFmpeg",
                                 id: parse.id
-                            }))
+                            }));
+                            break;
                         }
-                        break;
                     }
                 }
                 socket.onopen = () => res(socket);
@@ -242,27 +237,23 @@
                 }
                 constructor(version, logFunction, progressFunction, isMultiThreaded) {
                     this.version = version;
-                    this.isMultiThreaded = !!isMultiThreaded;
+                    this.isMultiThreaded = typeof isMultiThreaded !== "undefined" ? !!isMultiThreaded : version.endsWith("mt");
                     this.promise = new Promise(async res => {
                         if (this.version.startsWith("0.11")) {
-                            console.log(`${window.location.href.substring(0, window.location.href.lastIndexOf("/"))}/ffmpeg/${version}/ffmpeg-core.js`);
                             this.ffmpeg = FFmpeg.createFFmpeg({
                                 log: true,
                                 mainName: version === "0.11.x-st" ? "main" : undefined,
                                 corePath: `${window.location.href.substring(0, window.location.href.lastIndexOf("/"))}/ffmpeg/${version}/ffmpeg-core.js`
                             });
-                            console.log("Loading!!!");
                             await this.load();
-                            console.log("Loaded");
                             this.ffmpeg.setLogger(logFunction);
                             this.ffmpeg.setProgress(progressFunction);
-                            console.log("Resolving...");
                             res();
                         } else {
                             this.ffmpeg = new FFmpegWASM.FFmpeg();
                             await this.load();
                             this.ffmpeg.on("log", logFunction);
-                            this.ffmpeg.on("progress", (progress) => progressFunction({ratio: progress.progress}));
+                            this.ffmpeg.on("progress", (progress) => progressFunction({ ratio: progress.progress }));
                         }
                         res();
                     })
@@ -280,13 +271,34 @@
                     return await this.ffmpeg.exec(commands);
                 }
                 removeFile = async (path) => {
+                    if (this.version === "0.11.x-st") return; // The single-threaded instance of FFmpeg WebAssembly 0.11.x isn't able to do more than one conversion, and therefore all the files are deleted when the process is closed after the run command.
                     if (this.version.startsWith("0.11")) return await this.ffmpeg.FS("unlink", path);
                     return await this.ffmpeg.deleteFile(path);
                 }
                 exit = async () => {
                     if (this.version.startsWith("0.11")) return await this.ffmpeg.exit();
-                    return await ffmpeg.terminate();
+                    return await this.ffmpeg.terminate();
                 }
+            }
+            /**
+             * Get the ffmpegOperation object
+             * @param version the version of FFmpeg WebAssembly that should be loaded
+             * @param id the ID of the current FFmpeg operation
+             * @param code the code block used to update the FFmpeg text output
+             * @param progress the Progress HTML element used to update the FFmpeg operation process
+             */
+            function getFfmpegOperation(version, id, code, progress) {
+                return new ffmpegOperations(version, (msg) => {
+                    // Sometimes (usually after a reload), FFmpeg WebAssembly appends the new message to the old ones, instead of sending only the new one. So, if we notice that the new message start with the old message, we'll trim the old part.
+                    const prevMsg = prevTextMap.get(id);
+                    prevTextMap.set(id, msg.message);
+                    if (prevMsg && msg.message && msg.message.indexOf(prevMsg) === 0) msg.message = msg.message.substring(prevMsg.length);
+                    ws.send(JSON.stringify({ action: "log", text: msg.message, id }));
+                    code.textContent = msg.message;
+                    ;
+                }, ({ ratio }) => {
+                    progress.value = ratio;
+                });
             }
         })()
 

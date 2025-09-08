@@ -186,11 +186,11 @@ class FFmpegServer:
     The list of the allowed file paths that can be read from the server
     """
     def __init__(self, host="127.0.0.1", suggested_port = 10000):
-        self.host = host
+        self.host = host if host != None else "127.0.0.1"
         """
         The host IP used for the server
         """
-        self.port = suggested_port
+        self.port = suggested_port if suggested_port != None else 10000
         """
         The port of the server where the script will run
         """
@@ -202,7 +202,6 @@ class FFmpegServer:
         """
         A Future that'll be resolved when the Server will be staretd
         """
-        script_dir = os.path.dirname(os.path.abspath(__file__))
 
     def _check_port(self, host: str = None, port: int = None):
         """
@@ -273,7 +272,7 @@ class FFmpegOperation:
 
     async def create_ffmpeg(self): 
         """
-        Create the FFmpeg object of this operation to the 
+        Create the FFmpeg object of this operation
         """
         if self._source_ready: return
         await self.server._connected_to_ws
@@ -385,9 +384,47 @@ async def _fallback():
     It uses all the arguments from the command line to build the FFmpeg command. 
     The script automatically fetches the requested files.
     """
-    server = FFmpegServer()
+    version = "0.11.x-mt"
+    port = None
+    hostname = None
+    files: list[FileBridge] = []
+    """
+    Array of FileBridge objects, only if the user manually specifies them
+    """
+    start_ffmpeg_command = 1
+    """
+    The position in the `sys.argv` array where the FFmpeg command starts
+    """
+    try:
+        start_ffmpeg_command = sys.argv.index("--ffmpeg-command") + 1
+    except ValueError:
+        pass
+    if start_ffmpeg_command != 1:
+        """
+        Only the command-line arguments that are not the FFmpeg script
+        """
+        command_arg = sys.argv[1:start_ffmpeg_command]
+        while (len(command_arg) != 0):
+            if (command_arg[0] == "--ffmpeg-version"):
+                if command_arg[1] != "0.11.x-mt" and command_arg[1] != "0.11.x-st" and command_arg[1] != "0.12.x-mt" and command_arg[1] != "0.12.x-st": raise Exception("Unknown FFmpeg WebAssembly version passed: choose between:\n- 0.11.x-mt\n- 0.11.x-st\n- 0.12.x-mt\n- 0.12.x-st")
+                version = command_arg[1]
+                command_arg = command_arg[2:]
+            elif (command_arg[0] == "--load-file"):
+                if not os.path.isfile(command_arg[1]): raise Exception(f"Passed file path {command_arg[1]} not found")
+                if len(command_arg) < 3: raise Exception("When using the --load-file argument, provide the file path of the file to load and the name it appears in the FFmpeg script.")
+                files.append(FileBridge(command_arg[1], command_arg[2], command_arg[2]))
+                command_arg = command_arg[3:]
+            elif command_arg[0] == "--hostname":
+                hostname = command_arg[1]
+                command_arg = command_arg[2:]
+            elif command_arg[0] == "--port":
+                port = command_arg[1]
+                command_arg = command_arg[2:]
+            else: command_arg = command_arg[1:]
+    server = FFmpegServer(hostname, None if port == None else int(port))
     await asyncio.create_task(server.start())
-    await FFmpegOperation(server).run(commands=sys.argv[1:], files=[])
+
+    await FFmpegOperation(server, version).run(commands=sys.argv[start_ffmpeg_command:], files=files)
 
 def _main():
     """

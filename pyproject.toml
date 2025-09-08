@@ -4,20 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ffmpeg-wasm-bridge"
-version = "1.0.0"
+version = "1.1.0"
 description = "Convert media files using FFmpeg WebAssembly and a local server"
 readme = "README.md"
 authors = [{ name = "dinoosauro", email = "dinoosauro-python@googlegroups.com" }]
 license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = ["aiohttp"]
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 keywords = ["ffmpeg", "webassembly", "ffmpeg server", "server"]
 
 [project.urls]

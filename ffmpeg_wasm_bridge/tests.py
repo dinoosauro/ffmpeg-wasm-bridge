@@ -48,7 +48,7 @@ class __test_files():
 
 
 async def __tests():
-    for ffmpeg_version in ["0.12.x-mt", "0.12.x-st", "0.11.x-mt"]:
+    for ffmpeg_version in ["0.12.x-mt", "0.12.x-st", "0.11.x-mt", "0.11.x-st"]:
         test_class = __test_files(ffmpeg_version)
         await test_class.start()
         test_class.operation = FFmpegOperation(test_class.server, ffmpeg_version)
