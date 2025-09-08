@@ -22,6 +22,20 @@ print in the console, and the script will handle everything else.
 
 Example: `python3 server.py -i file_0.mp3 -acodec libopus file_0.ogg`
 
+#### Custom arguments
+
+While the command above will be enough for most use cases, you can specify some arguments to alter the behavior of the script:
+
+| Argument | Description |
+| - | - |
+| `--ffmpeg-version` | Specify the version of FFmpeg WebAssembly to use, between: <ul><li>`0.11.x-mt`</li><li>`0.11.x-st` (not recommended due to its instability)</li><li>`0.12.x-st`</li><li>`0.12.x-mt`</li></ul>The default value is `0.11.x-mt`. |
+| `--load-files` | Force loading a file in FFmpeg WebAssembly's virtual memory. In this case, you need to provide in the following two arguments the path of the file and the name that appears in the command.<br>This can be useful if the FFmpeg command needs to load indirectly some files (like, for example, while merging videos using the concat filter)<br>**Note:** By default, the Python script scans for the files to load in the virtual memory by looking at the command. If you use this command, the script will load only the files you pass. |
+| `--port` | Change the port used for the local server |
+| `--hostname` | Change the hostname used for the local server |
+| `--ffmpeg-command` | If you've used at least one of the arguments above, put this argument before your FFmpeg command. |
+
+Example: `python3 server.py --ffmpeg-version 0.12.x-st --load-file "/Users/Username/Downloads/Image0.jpg" "Image0.jpg" --load-file "/Users/Username/Downloads/Image1.jpg" "Image1.jpg" --load-file "/Users/Username/Downloads/ConcatFilter.txt" "Filter.txt" --ffmpeg-command -f concat -safe 0 -r 1 -i Filter.txt Output.mp4`
+
 ### In another Python script
 
 You can use this server in your Python scripts/applications using the two
@@ -73,8 +87,10 @@ multiple commands.
 
 #### Parameters
 
-You need to specify only a parameter in the FFmpegOperation class, that is the
-FFmpegServer this class will depend on.
+| Parameter name | Description | Extra notes |
+| - | - | - |
+| `source` | The FFmpegServer to which this operation is tied | Required |
+| `ffmpeg_wasm_version` | The version of FFmpeg WebAssembly to use, between: <ul><li>`0.11.x-mt`</li><li>`0.11.x-st` (not recommended due to its instability)</li><li>`0.12.x-st`</li><li>`0.12.x-mt`</li></ul>| Optional. Defaults to: `0.11.x-mt` |
 
 #### Functions
 
